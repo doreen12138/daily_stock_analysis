@@ -494,7 +494,25 @@ def apply_placeholder_fill(result: "AnalysisResult", missing_fields: List[str]) 
 
 # ---------- chip_structure fallback (Issue #589) ----------
 
-_CHIP_KEYS: tuple = ("profit_ratio", "avg_cost", "concentration", "chip_health")
+_CHIP_KEYS: tuple = (
+    "profit_ratio",
+    "avg_cost",
+    "concentration",
+    "concentration_70",
+    "cost_70_low",
+    "cost_70_high",
+    "cost_90_low",
+    "cost_90_high",
+    "peak_price",
+    "peak_ratio",
+    "peak_strength",
+    "secondary_peaks",
+    "sample_days",
+    "calculation_method",
+    "source",
+    "is_estimated",
+    "chip_health",
+)
 
 
 def _is_value_placeholder(v: Any) -> bool:
@@ -849,16 +867,33 @@ def _build_chip_structure_from_data(chip_data: Any, language: str = "zh") -> Dic
         pr = _safe_float(chip_data.profit_ratio)
         ac = chip_data.avg_cost
         c90 = _safe_float(chip_data.concentration_90)
+        data = chip_data.to_dict() if hasattr(chip_data, "to_dict") else vars(chip_data)
     else:
-        d = chip_data if isinstance(chip_data, dict) else {}
-        pr = _safe_float(d.get("profit_ratio"))
-        ac = d.get("avg_cost")
-        c90 = _safe_float(d.get("concentration_90"))
+        data = chip_data if isinstance(chip_data, dict) else {}
+        pr = _safe_float(data.get("profit_ratio"))
+        ac = data.get("avg_cost")
+        c90 = _safe_float(data.get("concentration_90"))
     chip_health = _derive_chip_health(pr, c90, language=language)
+    peak_price = _safe_float(data.get("peak_price"))
+    peak_ratio = _safe_float(data.get("peak_ratio"))
+    concentration_70 = _safe_float(data.get("concentration_70"))
     return {
         "profit_ratio": f"{pr:.1%}",
         "avg_cost": ac if (ac is not None and _safe_float(ac) != 0.0) else "N/A",
         "concentration": f"{c90:.2%}",
+        "concentration_70": f"{concentration_70:.2%}" if concentration_70 else "N/A",
+        "cost_70_low": data.get("cost_70_low") or "N/A",
+        "cost_70_high": data.get("cost_70_high") or "N/A",
+        "cost_90_low": data.get("cost_90_low") or "N/A",
+        "cost_90_high": data.get("cost_90_high") or "N/A",
+        "peak_price": peak_price if peak_price > 0 else "N/A",
+        "peak_ratio": f"{peak_ratio:.1%}" if peak_ratio > 0 else "N/A",
+        "peak_strength": data.get("peak_strength") or "N/A",
+        "secondary_peaks": data.get("secondary_peaks") or [],
+        "sample_days": data.get("sample_days") or "N/A",
+        "calculation_method": data.get("calculation_method") or "provider_reported",
+        "source": data.get("source") or "unknown",
+        "is_estimated": bool(data.get("is_estimated", False)),
         "chip_health": chip_health,
     }
 
@@ -1943,6 +1978,16 @@ class GeminiAnalyzer:
                 "profit_ratio": 获利比例,
                 "avg_cost": 平均成本,
                 "concentration": 筹码集中度,
+                "cost_70_low": 70%成本区下限,
+                "cost_70_high": 70%成本区上限,
+                "cost_90_low": 90%成本区下限,
+                "cost_90_high": 90%成本区上限,
+                "peak_price": 主筹码峰价格,
+                "peak_ratio": 主筹码峰占比,
+                "sample_days": 计算使用的交易日数量,
+                "calculation_method": "计算方法",
+                "source": "数据来源",
+                "is_estimated": true/false,
                 "chip_health": "健康/一般/警惕"
             }
         },
@@ -2131,6 +2176,16 @@ class GeminiAnalyzer:
                 "profit_ratio": 获利比例,
                 "avg_cost": 平均成本,
                 "concentration": 筹码集中度,
+                "cost_70_low": 70%成本区下限,
+                "cost_70_high": 70%成本区上限,
+                "cost_90_low": 90%成本区下限,
+                "cost_90_high": 90%成本区上限,
+                "peak_price": 主筹码峰价格,
+                "peak_ratio": 主筹码峰占比,
+                "sample_days": 计算使用的交易日数量,
+                "calculation_method": "计算方法",
+                "source": "数据来源",
+                "is_estimated": true/false,
                 "chip_health": "健康/一般/警惕"
             }
         },
@@ -3935,6 +3990,22 @@ class GeminiAnalyzer:
         if 'chip' in context:
             chip = context['chip']
             profit_ratio = chip.get('profit_ratio', 0)
+            peak_price = _safe_float(chip.get('peak_price'))
+            current_price = _safe_float(
+                (context.get('realtime') or {}).get('price')
+                or (context.get('today') or {}).get('close')
+            )
+            peak_deviation = (
+                (current_price - peak_price) / peak_price * 100
+                if peak_price > 0 and current_price > 0
+                else None
+            )
+            peak_deviation_text = f"{peak_deviation:+.2f}%" if peak_deviation is not None else "N/A"
+            estimate_notice = (
+                "该结果由 OHLCV 成交量衰减模型估算，不代表账户级真实持仓分布。"
+                if chip.get('is_estimated')
+                else "该结果来自外部筹码数据源。"
+            )
             prompt += f"""
 ### 筹码分布数据（效率指标）
 | 指标 | 数值 | 健康标准 |
@@ -3942,8 +4013,16 @@ class GeminiAnalyzer:
 | **获利比例** | **{profit_ratio:.1%}** | 70-90%时警惕 |
 | 平均成本 | {chip.get('avg_cost', 'N/A')} 元 | 现价应高于5-15% |
 | 90%筹码集中度 | {chip.get('concentration_90', 0):.2%} | <15%为集中 |
-| 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
+| 90%成本区 | {chip.get('cost_90_low', 'N/A')} - {chip.get('cost_90_high', 'N/A')} 元 | 覆盖90%估算筹码 |
+| 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | 越低越集中 |
+| 70%成本区 | {chip.get('cost_70_low', 'N/A')} - {chip.get('cost_70_high', 'N/A')} 元 | 覆盖70%估算筹码 |
+| 主筹码峰价格 | {chip.get('peak_price', 'N/A')} 元 | 当前价相对峰值 {peak_deviation_text} |
+| 主峰占比/强度 | {chip.get('peak_ratio', 'N/A')} / {chip.get('peak_strength', 'N/A')} | 仅用于结构比较 |
+| 样本窗口 | {chip.get('sample_days', 'N/A')} 个交易日 | 本地估算要求至少120日 |
+| 来源/方法 | {chip.get('source', 'N/A')} / {chip.get('calculation_method', 'N/A')} | |
 | 筹码状态 | {chip.get('chip_status', unknown_text)} | |
+
+> {estimate_notice}
 """
         else:
             chip_unavailable_text = get_chip_unavailable_text(report_language)

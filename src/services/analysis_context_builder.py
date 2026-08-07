@@ -338,11 +338,16 @@ def _build_chip_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisContextBl
         )
 
     source = _source_text(chip.get("source"))
+    status = (
+        ContextFieldStatus.ESTIMATED
+        if bool(chip.get("is_estimated"))
+        else ContextFieldStatus.AVAILABLE
+    )
     return AnalysisContextBlock(
-        status=ContextFieldStatus.AVAILABLE,
+        status=status,
         items={
             key: AnalysisContextItem(
-                status=ContextFieldStatus.AVAILABLE,
+                status=status,
                 value=value,
                 source=source,
             )
@@ -350,7 +355,16 @@ def _build_chip_block(artifacts: PipelineAnalysisArtifacts) -> AnalysisContextBl
             if value is not None
         },
         source=source,
-        metadata={"date": chip.get("date")} if chip.get("date") else {},
+        metadata={
+            key: value
+            for key, value in {
+                "date": chip.get("date"),
+                "sample_days": chip.get("sample_days"),
+                "calculation_method": chip.get("calculation_method"),
+                "is_estimated": chip.get("is_estimated"),
+            }.items()
+            if value not in (None, "")
+        },
     )
 
 

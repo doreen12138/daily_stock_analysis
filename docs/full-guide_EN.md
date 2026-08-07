@@ -363,7 +363,7 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `TICKFLOW_BATCH_SIZE` | Maximum symbols per TickFlow batch request for daily K-lines and realtime quotes. | `100` | Optional |
 | `ENABLE_REALTIME_QUOTE` | Enable real-time quotes (if disabled, uses historical closing prices for analysis) | `true` | Optional |
 | `ENABLE_REALTIME_TECHNICAL_INDICATORS` | Intraday real-time technicals: Calculate MA5/MA10/MA20 and bull trends using real-time prices when enabled (Issue #234); uses yesterday's close if disabled. | `true` | Optional |
-| `ENABLE_CHIP_DISTRIBUTION` | Enable chip distribution analysis (this API is unstable, recommended to disable for cloud deployment). GitHub Actions users must set `ENABLE_CHIP_DISTRIBUTION=true` in Repository Variables to enable; disabled by default in workflows. | `true` | Optional |
+| `ENABLE_CHIP_DISTRIBUTION` | Enable external AkShare/Tushare chip-distribution APIs. When disabled or unavailable, the system still attempts a local estimate from the latest 120 valid OHLCV trading days. GitHub Actions disables the external APIs by default. | `true` | Optional |
 | `ENABLE_EASTMONEY_PATCH` | Eastmoney API patch: Recommended to set to `true` when Eastmoney APIs fail frequently (e.g., RemoteDisconnected, connection closed). Injects NID tokens and random User-Agents to reduce rate limiting probability. | `false` | Optional |
 | `REALTIME_SOURCE_PRIORITY` | Real-time quote source priority (comma-separated), e.g., `tencent,akshare_sina,efinance,akshare_em`; add `tickflow` explicitly to use TickFlow realtime quotes | See .env.example | Optional |
 | `ENABLE_FUNDAMENTAL_PIPELINE` | Master switch for fundamental aggregation; when disabled, returns `not_supported` block only, without altering the original analysis pipeline. | `true` | Optional |
@@ -372,6 +372,8 @@ For the notification baseline, diagnostics, and deployment notes, see [Notificat
 | `FUNDAMENTAL_RETRY_MAX` | Retry count for fundamental capabilities (including the first attempt) | `1` | Optional |
 | `FUNDAMENTAL_CACHE_TTL_SECONDS` | Fundamental aggregation cache TTL (seconds), short cache to reduce repeated API pulling. | `120` | Optional |
 | `FUNDAMENTAL_CACHE_MAX_ENTRIES` | Maximum entries for fundamental cache (evicted by time within TTL) | `256` | Optional |
+
+The local chip estimator uses the latest 120 valid OHLCV trading days and a deterministic volume-migration and decay model to calculate average cost, profitable-chip ratio, 70%/90% cost zones and concentration, a primary chip peak, and optional secondary peaks. Because historical turnover is not part of the standard daily-bar contract, the estimator derives migration intensity from relative volume and marks results with `source=local_ohlcv_estimate`, `calculation_method=ohlcv_volume_decay_v1`, and `is_estimated=true`. These values estimate a price-volume distribution; they are not account-level holdings. No estimate is produced when fewer than 120 valid trading days remain after excluding suspensions or invalid prices. Valid external chip data keeps priority, while the local estimator is a fail-open fallback that cannot stop the main analysis.
 
 > **Behavior Notes:**
 > - **A-shares**: Returns aggregated capabilities by `valuation/growth/earnings/institution/capital_flow/dragon_tiger/boards`.
