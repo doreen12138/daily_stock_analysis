@@ -416,14 +416,22 @@ def _handle_get_chip_distribution(stock_code: str) -> dict:
         "cost_70_low": chip.cost_70_low,
         "cost_70_high": chip.cost_70_high,
         "concentration_70": chip.concentration_70,
+        "peak_price": chip.peak_price,
+        "peak_ratio": chip.peak_ratio,
+        "peak_strength": chip.peak_strength,
+        "secondary_peaks": chip.secondary_peaks,
+        "sample_days": chip.sample_days,
+        "calculation_method": chip.calculation_method,
+        "is_estimated": chip.is_estimated,
     }
 
 
 get_chip_distribution_tool = ToolDefinition(
     name="get_chip_distribution",
     description="Get chip distribution analysis for a stock. Returns profit ratio, "
-                "average cost, chip concentration at 90% and 70% levels. "
-                "Useful for judging support/resistance and holding structure.",
+                "average cost, 90% and 70% cost zones, concentration, chip peaks, "
+                "sample window, source and calculation method. Results may come from "
+                "a deterministic 120-day OHLCV estimate when external data is unavailable.",
     parameters=[
         ToolParameter(
             name="stock_code",

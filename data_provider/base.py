@@ -2219,7 +2219,11 @@ class DataFetcherManager:
         """Shortcut kept for backward-compat with A-share general loop."""
         return self._supplement_quote(stock_code, primary_quote, "LongbridgeFetcher")
 
-    def get_chip_distribution(self, stock_code: str):
+    def get_chip_distribution(
+        self,
+        stock_code: str,
+        daily_data: Optional[pd.DataFrame] = None,
+    ):
         """
         获取筹码分布数据（带熔断和多数据源降级）
 
@@ -2243,36 +2247,34 @@ class DataFetcherManager:
 
         config = get_config()
 
-        # 如果筹码分布功能被禁用，直接返回 None
-        if not config.enable_chip_distribution:
-            logger.debug(f"[筹码分布] 功能已禁用，跳过 {stock_code}")
-            return None
-
         circuit_breaker = get_chip_circuit_breaker()
 
         candidate_fetchers = []
-        # 直接遍历管理器已经按 priority 排好序的数据源列表
-        for fetcher in self._get_fetchers_snapshot():
-            # 只处理实现了筹码分布逻辑的数据源
-            if not hasattr(fetcher, 'get_chip_distribution'):
-                continue
+        if config.enable_chip_distribution:
+            # 直接遍历管理器已经按 priority 排好序的数据源列表
+            for fetcher in self._get_fetchers_snapshot():
+                # 只处理实现了筹码分布逻辑的数据源
+                if not hasattr(fetcher, 'get_chip_distribution'):
+                    continue
 
-            fetcher_name = fetcher.name
-            # 动态生成熔断器的 key，例如 "TushareFetcher" -> "tushare_chip"
-            source_key = f"{fetcher_name.replace('Fetcher', '').lower()}_chip"
+                fetcher_name = fetcher.name
+                # 动态生成熔断器的 key，例如 "TushareFetcher" -> "tushare_chip"
+                source_key = f"{fetcher_name.replace('Fetcher', '').lower()}_chip"
 
-            # 检查熔断器状态
-            if not circuit_breaker.is_available(source_key):
-                logger.debug(f"[熔断] {fetcher_name} 筹码接口处于熔断状态，尝试下一个")
-                continue
+                # 检查熔断器状态
+                if not circuit_breaker.is_available(source_key):
+                    logger.debug(f"[熔断] {fetcher_name} 筹码接口处于熔断状态，尝试下一个")
+                    continue
 
-            candidate_fetchers.append((fetcher, fetcher_name, source_key))
+                candidate_fetchers.append((fetcher, fetcher_name, source_key))
+        else:
+            logger.debug(f"[筹码分布] 外部接口已禁用，尝试本地 K 线估算 {stock_code}")
 
         for index, (fetcher, fetcher_name, source_key) in enumerate(candidate_fetchers):
             fallback_to = (
                 candidate_fetchers[index + 1][1]
                 if index + 1 < len(candidate_fetchers)
-                else None
+                else "LocalOHLCVEstimate"
             )
             attempt_start = time.time()
             try:
@@ -2329,6 +2331,55 @@ class DataFetcherManager:
                 logger.warning(f"[筹码分布] {fetcher_name} 获取 {stock_code} 失败: {e}")
                 circuit_breaker.record_failure(source_key, str(e))
                 continue
+
+        local_start = time.time()
+        try:
+            record_provider_run_started(
+                data_type="chip",
+                provider="LocalOHLCVEstimate",
+                operation="analyze_chip_peak",
+            )
+            local_daily_data = daily_data
+            if local_daily_data is None:
+                local_daily_data, _ = self.get_daily_data(stock_code, days=120)
+            from src.services.chip_peak_analyzer import analyze_chip_peak
+
+            local_chip = analyze_chip_peak(local_daily_data, stock_code, window=120)
+            latency_ms = int((time.time() - local_start) * 1000)
+            if _is_meaningful_chip_distribution(local_chip):
+                record_provider_run(
+                    data_type="chip",
+                    provider="LocalOHLCVEstimate",
+                    operation="analyze_chip_peak",
+                    success=True,
+                    latency_ms=latency_ms,
+                    record_count=1,
+                )
+                logger.info(f"[筹码分布] {stock_code} 使用本地 120 日 K 线估算成功")
+                return local_chip
+            record_provider_run(
+                data_type="chip",
+                provider="LocalOHLCVEstimate",
+                operation="analyze_chip_peak",
+                success=False,
+                latency_ms=latency_ms,
+                error_type="insufficient_data",
+                error_message="fewer than 120 valid OHLCV bars",
+                record_count=0,
+            )
+        except Exception as e:
+            error_type, error_reason = summarize_exception(e)
+            record_provider_run(
+                data_type="chip",
+                provider="LocalOHLCVEstimate",
+                operation="analyze_chip_peak",
+                success=False,
+                latency_ms=int((time.time() - local_start) * 1000),
+                error_type=error_type,
+                error_message=error_reason,
+                record_count=0,
+            )
+            logger.warning(f"[筹码分布] {stock_code} 本地 120 日 K 线估算失败: {e}")
 
         logger.warning(f"[筹码分布] {stock_code} 所有数据源均失败")
         return None

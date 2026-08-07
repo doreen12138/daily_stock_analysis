@@ -105,6 +105,36 @@ class TestBuildChipStructureFromData(unittest.TestCase):
         self.assertEqual(out["concentration"], "8.00%")
         self.assertEqual(out["chip_health"], "警惕")
 
+    def test_local_estimate_preserves_peak_cost_zone_and_source(self) -> None:
+        chip = ChipDistribution(
+            code="600519",
+            source="local_ohlcv_estimate",
+            profit_ratio=0.56,
+            avg_cost=10.2,
+            cost_70_low=9.8,
+            cost_70_high=10.6,
+            cost_90_low=9.4,
+            cost_90_high=11.0,
+            concentration_90=0.0784,
+            concentration_70=0.0392,
+            peak_price=10.1,
+            peak_ratio=0.18,
+            peak_strength=2.4,
+            sample_days=120,
+            calculation_method="ohlcv_volume_decay_v1",
+            is_estimated=True,
+        )
+
+        out = _build_chip_structure_from_data(chip)
+
+        self.assertEqual(out["peak_price"], 10.1)
+        self.assertEqual(out["peak_ratio"], "18.0%")
+        self.assertEqual(out["cost_70_low"], 9.8)
+        self.assertEqual(out["cost_90_high"], 11.0)
+        self.assertEqual(out["sample_days"], 120)
+        self.assertEqual(out["source"], "local_ohlcv_estimate")
+        self.assertTrue(out["is_estimated"])
+
     def test_dict_with_string_values(self) -> None:
         d = {"profit_ratio": "0.5", "avg_cost": "25.6", "concentration_90": "0.15"}
         out = _build_chip_structure_from_data(d)
