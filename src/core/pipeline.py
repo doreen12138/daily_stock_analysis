@@ -379,14 +379,17 @@ class StockAnalysisPipeline:
 
             # 断点续传检查：如果最新可复用交易日的数据已存在，则跳过
             if not force_refresh and self.db.has_today_data(code, target_date):
-                logger.info(
-                    f"{stock_name}({code}) {target_date} 数据已存在，跳过获取（断点续传）"
-                )
-                return True, None
+                history_start = target_date - timedelta(days=240)
+                cached_bars = self.db.get_data_range(code, history_start, target_date)
+                if len(cached_bars or []) >= 120:
+                    logger.info(
+                        f"{stock_name}({code}) {target_date} 数据已存在，跳过获取（断点续传）"
+                    )
+                    return True, None
 
             # 从数据源获取数据
             logger.info(f"{stock_name}({code}) 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=120)
 
             if df is None or df.empty:
                 return False, "获取数据为空"
@@ -488,13 +491,30 @@ class StockAnalysisPipeline:
             if not stock_name:
                 stock_name = f'股票{code}'
 
+            analysis_daily_data = None
+            try:
+                from src.services.history_loader import get_frozen_target_date
+                history_market = get_market_for_stock(normalize_stock_code(code))
+                history_target = get_frozen_target_date()
+                if history_target is None:
+                    history_target = get_market_now(history_market).date()
+                history_start = history_target - timedelta(days=240)
+                history_bars = self.db.get_data_range(code, history_start, history_target)
+                if history_bars:
+                    analysis_daily_data = pd.DataFrame([bar.to_dict() for bar in history_bars])
+            except Exception as e:
+                logger.warning(f"{stock_name}({code}) 读取 120 日分析数据失败: {e}")
+
             # Step 2: 获取筹码分布 - 使用统一入口，带熔断保护
             chip_data = None
             try:
-                chip_data = self.fetcher_manager.get_chip_distribution(code)
+                chip_data = self.fetcher_manager.get_chip_distribution(
+                    code,
+                    daily_data=analysis_daily_data,
+                )
                 if chip_data:
                     logger.info(f"{stock_name}({code}) 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
-                              f"90%集中度={chip_data.concentration_90:.2%}")
+                                f"90%集中度={chip_data.concentration_90:.2%}")
                 else:
                     logger.debug(f"{stock_name}({code}) 筹码分布获取失败或已禁用")
             except Exception as e:
@@ -564,20 +584,14 @@ class StockAnalysisPipeline:
             # Step 3: 趋势分析（基于交易理念）— 在 Agent 分支之前执行，供两条路径共用
             trend_result: Optional[TrendAnalysisResult] = None
             try:
-                from src.services.history_loader import get_frozen_target_date
-                _mkt = get_market_for_stock(normalize_stock_code(code))
-                frozen = get_frozen_target_date()
-                end_date = frozen if frozen else get_market_now(_mkt).date()
-                start_date = end_date - timedelta(days=89)  # ~60 trading days for MA60
-                historical_bars = self.db.get_data_range(code, start_date, end_date)
-                if historical_bars:
-                    df = pd.DataFrame([bar.to_dict() for bar in historical_bars])
+                if analysis_daily_data is not None and not analysis_daily_data.empty:
+                    df = analysis_daily_data.copy()
                     # Issue #234: Augment with realtime for intraday MA calculation
                     if self.config.enable_realtime_quote and realtime_quote:
                         df = self._augment_historical_with_realtime(df, realtime_quote, code)
                     trend_result = self.trend_analyzer.analyze(df, code)
                     logger.info(f"{stock_name}({code}) 趋势分析: {trend_result.trend_status.value}, "
-                              f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
+                                f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:
                 logger.warning(f"{stock_name}({code}) 趋势分析失败: {e}", exc_info=True)
 
@@ -970,8 +984,20 @@ class StockAnalysisPipeline:
             enhanced['chip'] = {
                 'profit_ratio': chip_data.profit_ratio,
                 'avg_cost': chip_data.avg_cost,
+                'cost_90_low': chip_data.cost_90_low,
+                'cost_90_high': chip_data.cost_90_high,
                 'concentration_90': chip_data.concentration_90,
+                'cost_70_low': chip_data.cost_70_low,
+                'cost_70_high': chip_data.cost_70_high,
                 'concentration_70': chip_data.concentration_70,
+                'peak_price': getattr(chip_data, 'peak_price', 0.0),
+                'peak_ratio': getattr(chip_data, 'peak_ratio', 0.0),
+                'peak_strength': getattr(chip_data, 'peak_strength', 0.0),
+                'secondary_peaks': getattr(chip_data, 'secondary_peaks', []),
+                'sample_days': getattr(chip_data, 'sample_days', 0),
+                'calculation_method': getattr(chip_data, 'calculation_method', ''),
+                'source': getattr(chip_data, 'source', 'unknown'),
+                'is_estimated': getattr(chip_data, 'is_estimated', False),
                 'chip_status': chip_data.get_chip_status(current_price or 0),
             }
         

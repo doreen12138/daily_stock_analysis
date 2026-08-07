@@ -67,6 +67,19 @@ class ChipStructure(BaseModel):
     profit_ratio: Optional[Union[int, float, str]] = None
     avg_cost: Optional[Union[int, float, str]] = None
     concentration: Optional[Union[int, float, str]] = None
+    concentration_70: Optional[Union[int, float, str]] = None
+    cost_70_low: Optional[Union[int, float, str]] = None
+    cost_70_high: Optional[Union[int, float, str]] = None
+    cost_90_low: Optional[Union[int, float, str]] = None
+    cost_90_high: Optional[Union[int, float, str]] = None
+    peak_price: Optional[Union[int, float, str]] = None
+    peak_ratio: Optional[Union[int, float, str]] = None
+    peak_strength: Optional[Union[int, float, str]] = None
+    secondary_peaks: Optional[List[Dict[str, Any]]] = None
+    sample_days: Optional[Union[int, str]] = None
+    calculation_method: Optional[str] = None
+    source: Optional[str] = None
+    is_estimated: Optional[bool] = None
     chip_health: Optional[str] = None
 
 

@@ -4,6 +4,9 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
+import pandas as pd
+
 from data_provider.base import DataFetcherManager
 from data_provider.realtime_types import ChipDistribution, get_chip_circuit_breaker
 
@@ -155,3 +158,78 @@ def test_manager_records_failed_chip_attempt_and_falls_back_to_next_fetcher():
         "provider_run_started",
         "provider_run",
     ]
+
+
+def _local_daily_data(days: int = 120) -> pd.DataFrame:
+    close = 10 + np.sin(np.arange(days) / 10.0) * 0.2
+    return pd.DataFrame(
+        {
+            "date": pd.bdate_range("2025-01-02", periods=days),
+            "high": close + 0.2,
+            "low": close - 0.2,
+            "close": close,
+            "volume": np.full(days, 1_000_000.0),
+        }
+    )
+
+
+def test_manager_uses_local_estimate_when_external_sources_are_disabled() -> None:
+    manager = DataFetcherManager(fetchers=[])
+
+    with patch(
+        "src.config.get_config",
+        return_value=SimpleNamespace(enable_chip_distribution=False),
+    ):
+        chip = manager.get_chip_distribution("600519", daily_data=_local_daily_data())
+
+    assert chip is not None
+    assert chip.source == "local_ohlcv_estimate"
+    assert chip.sample_days == 120
+    assert chip.is_estimated is True
+
+
+def test_manager_prefers_valid_external_data_over_local_estimate() -> None:
+    external = ChipDistribution(
+        code="600519",
+        source="external",
+        avg_cost=12.3,
+        concentration_90=0.13,
+    )
+    fetcher = _ChipFetcher("ExternalFetcher", 0, external)
+    manager = DataFetcherManager(fetchers=[fetcher])
+
+    with patch(
+        "src.config.get_config",
+        return_value=SimpleNamespace(enable_chip_distribution=True),
+    ):
+        chip = manager.get_chip_distribution("600519", daily_data=_local_daily_data())
+
+    assert chip is external
+    assert fetcher.calls == 1
+
+
+def test_manager_uses_local_estimate_after_external_placeholder() -> None:
+    fetcher = _ChipFetcher("ExternalFetcher", 0, ChipDistribution(code="600519"))
+    manager = DataFetcherManager(fetchers=[fetcher])
+
+    with patch(
+        "src.config.get_config",
+        return_value=SimpleNamespace(enable_chip_distribution=True),
+    ):
+        chip = manager.get_chip_distribution("600519", daily_data=_local_daily_data())
+
+    assert chip is not None
+    assert chip.source == "local_ohlcv_estimate"
+    assert fetcher.calls == 1
+
+
+def test_manager_returns_none_when_local_history_is_short() -> None:
+    manager = DataFetcherManager(fetchers=[])
+
+    with patch(
+        "src.config.get_config",
+        return_value=SimpleNamespace(enable_chip_distribution=False),
+    ):
+        chip = manager.get_chip_distribution("600519", daily_data=_local_daily_data(119))
+
+    assert chip is None
