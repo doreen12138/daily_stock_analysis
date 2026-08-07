@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+
+- [改进] GitHub Actions 日报默认优先使用腾讯、Baostock、AkShare、PyTDX 和 YFinance 等稳定免费日线源，将 Efinance 默认优先级降至 P6；来源异常、空结果或熔断时输出结构化 fallback 日志并自动尝试下一来源，单个 API 异常不终止其他股票分析与日报汇总
 - [新功能] 新增基于最近 120 个有效交易日 OHLCV 的确定性筹码分布估算，在 AkShare/Tushare 外部筹码接口关闭或不可用时提供平均成本、获利盘比例、70%/90% 成本区与集中度、主次筹码峰，并将估算来源、方法和窗口接入普通 Prompt、Agent、AnalysisContextPack 与报告 Schema；有效样本不足时保持 fail-open。
 - [新功能] Agent Chat 按会话持久化 Skill 选择，支持刷新和会话切换恢复，并区分省略 `skills`、显式空列表与非空选择；无持久化状态的历史会话继续使用运行时默认且不会被静默转为显式选择，复用分析 `context` 中残留的 legacy `skills` / `strategies` 也不会覆盖顶层三态或会话状态，非空但全部无效的 Skill 请求不会被当成显式空列表并清空既有选择
 - [改进] 后端 CI 在不跳过离线测试的前提下按完整测试文件分成三个独立 runner 并行执行，由单一 `backend-gate` 汇总门禁结果；实测文件耗时和首分片静态检查成本共同参与负载平衡，新测试文件自动纳入，现有 pip 安装和测试参数保持不变，避免 xdist 进程内并发的全局状态竞态。

@@ -416,7 +416,9 @@ daily_stock_analysis/
 | `TUSHARE_HTTP_URL` | Tushare Pro HTTP 接入地址；留空时使用官方端点 `http://api.tushare.pro`，仅在需通过公司内网代理、跨境网络或自建镜像时填 `http://` 或 `https://` 开头的完整地址 | `http://api.tushare.pro` | 可选 |
 | `TICKFLOW_API_KEY` | TickFlow API Key；可选，用于 A 股日 K、实时行情、股票列表/名称与大盘复盘增强；失败或权限不足时自动回退。 | - | 可选 |
 | `TICKFLOW_PRIORITY` | TickFlow 日 K 数据源优先级；数字越小越早尝试，默认 `2`；未配置 API Key 时不启用；不影响实时行情，实时行情顺序由 `REALTIME_SOURCE_PRIORITY` 控制。 | `2` | 可选 |
-| `TENCENT_PRIORITY` | 腾讯直连 A 股日 K 数据源优先级；数字越小越早尝试，默认 `5`，作为 Efinance、AkShare、Tushare、TickFlow、PyTDX、Baostock 和 YFinance 之后的最终兜底；不影响实时行情。 | `5` | 可选 |
+| `DAILY_SOURCE_PRIORITY` | A 股日 K 数据源顺序，使用逗号分隔的小写名称；列出的数据源按顺序优先，未列出的数据源继续按数字优先级追加。GitHub Actions 默认使用 `tencent,baostock,akshare,pytdx,yfinance,efinance,tushare,tickflow`。 | 空 | 可选 |
+| `EFINANCE_PRIORITY` | Efinance 日 K 数据源数字优先级；默认降级为 `6`，不再作为 P0。显式配置 `DAILY_SOURCE_PRIORITY` 时以列表顺序优先。 | `6` | 可选 |
+| `TENCENT_PRIORITY` | 腾讯直连 A 股日 K 数据源数字优先级；数字越小越早尝试，默认 `5`；GitHub Actions 通过 `DAILY_SOURCE_PRIORITY` 将其置于稳定免费源首位；不影响实时行情。 | `5` | 可选 |
 | `TICKFLOW_KLINE_ADJUST` | TickFlow 日 K 复权模式：`none`、`forward`、`backward`、`forward_additive`、`backward_additive`。 | `none` | 可选 |
 | `TICKFLOW_BATCH_DAILY_ENABLED` | 是否启用 TickFlow 批量日 K 预取；权限不足会短期缓存失败状态，并继续走常规回退。 | `true` | 可选 |
 | `TICKFLOW_BATCH_SIZE` | TickFlow 日 K 与实时行情批量请求的单批最大标的数。 | `100` | 可选 |
@@ -441,6 +443,8 @@ daily_stock_analysis/
 本地筹码估算使用最近 120 个有效交易日的 OHLCV，通过确定性的成交量迁移与衰减模型计算平均成本、获利盘比例、70%/90% 成本区与集中度、主筹码峰和可选次峰。历史换手率不在标准日线契约中时，模型使用相对成交量构造迁移强度，并在结果中标记 `source=local_ohlcv_estimate`、`calculation_method=ohlcv_volume_decay_v1` 和 `is_estimated=true`。该结果是价格—成交量分布估算，不是账户级真实持仓数据；不足 120 个有效交易日、停牌或异常价格导致有效样本不足时不生成估算。外部接口返回有效数据时仍优先使用外部结果，本地估算只作为稳定降级路径，失败不会中断主分析。
 
 > 行为说明：
+> - GitHub Actions 日报默认先尝试腾讯、Baostock、AkShare、PyTDX 和 YFinance，再使用 Efinance、Tushare 与 TickFlow；仓库变量 `DAILY_SOURCE_PRIORITY` 可覆盖该顺序。每个来源的异常、空结果或短期熔断都会记录结构化 `[数据源回退]` 日志并继续下一个来源。
+> - 单个日线 API 失败不会终止日报：同一股票会自动 fallback；全部来源均失败时仅该股票使用已有数据继续分析或标记失败，其他股票任务及日报汇总继续执行。
 > - A 股：按 `valuation/growth/earnings/institution/capital_flow/dragon_tiger/boards` 聚合能力返回；
 > - ETF：返回可得项，缺失能力标记为 `not_supported`，整体不影响原流程；
 > - 美股/港股：通过 yfinance 适配器返回 `valuation/growth/earnings/belong_boards`（来源 `info.sector`/`industry`），`institution/capital_flow/dragon_tiger/boards` 暂无对应数据源仍标记 `not_supported`；yfinance 不可用或字段缺失时整体降级回 `not_supported`，仍走 fail-open；

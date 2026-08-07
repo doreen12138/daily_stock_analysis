@@ -15,6 +15,7 @@
 """
 
 import logging
+import os
 import random
 import time
 from threading import BoundedSemaphore, RLock, Thread
@@ -797,6 +798,57 @@ class DataFetcherManager:
 
         return kept
 
+    @staticmethod
+    def _daily_source_token(fetcher: BaseFetcher) -> str:
+        return fetcher.name.removesuffix("Fetcher").lower()
+
+    @classmethod
+    def _order_cn_daily_fetchers(cls, fetchers: List[BaseFetcher]) -> List[BaseFetcher]:
+        configured = [
+            item.strip().lower()
+            for item in os.getenv("DAILY_SOURCE_PRIORITY", "").split(",")
+            if item.strip()
+        ]
+        if not configured:
+            return fetchers
+
+        ranks = {name: index for index, name in enumerate(configured)}
+        original_positions = {id(fetcher): index for index, fetcher in enumerate(fetchers)}
+        ordered = sorted(
+            fetchers,
+            key=lambda fetcher: (
+                ranks.get(cls._daily_source_token(fetcher), len(ranks)),
+                original_positions[id(fetcher)],
+            ),
+        )
+        if ordered != fetchers:
+            logger.info(
+                "[数据源路由] cn 日线应用 DAILY_SOURCE_PRIORITY: %s",
+                " -> ".join(fetcher.name for fetcher in ordered),
+            )
+        return ordered
+
+    @staticmethod
+    def _log_daily_fallback(
+        stock_code: str,
+        market: str,
+        current_source: str,
+        fallback_to: Optional[str],
+        reason: str,
+        error_type: str,
+    ) -> None:
+        if not fallback_to:
+            return
+        logger.warning(
+            "[数据源回退] code=%s market=%s from=%s to=%s reason=%s error_type=%s",
+            stock_code,
+            market,
+            current_source,
+            fallback_to,
+            reason,
+            error_type,
+        )
+
     @classmethod
     def _daily_health_key(cls, fetcher: BaseFetcher, market: str) -> str:
         return f"daily_data:{market}:{fetcher.name}"
@@ -1295,6 +1347,8 @@ class DataFetcherManager:
         if market != "cn":
             fetchers = self._filter_daily_fetchers_for_market(fetchers, market)
         fetchers = self._filter_fetchers_by_capability(fetchers, capability="daily_data")
+        if market == "cn":
+            fetchers = self._order_cn_daily_fetchers(fetchers)
         total_fetchers = len(fetchers)
 
         if total_fetchers == 0:
@@ -1328,6 +1382,14 @@ class DataFetcherManager:
                         continue
                     if not self._is_daily_source_available(fetcher, market):
                         errors.append(self._daily_source_unavailable_error(fetcher))
+                        self._log_daily_fallback(
+                            stock_code,
+                            market,
+                            fetcher.name,
+                            fallback_to,
+                            "circuit_open",
+                            "CircuitOpen",
+                        )
                         break
                     attempt_start = time.time()
                     try:
@@ -1380,6 +1442,15 @@ class DataFetcherManager:
                         )
                         if df is not None and df.empty:
                             self._record_daily_source_success(fetcher, market)
+                        errors.append(f"[{fetcher.name}] (EmptyResult) empty result")
+                        self._log_daily_fallback(
+                            stock_code,
+                            market,
+                            fetcher.name,
+                            fallback_to,
+                            "empty_result",
+                            "EmptyResult",
+                        )
                     except Exception as e:
                         error_type, error_reason = summarize_exception(e)
                         error_msg = f"[{fetcher.name}] ({error_type}) {error_reason}"
@@ -1400,6 +1471,14 @@ class DataFetcherManager:
                         )
                         self._record_daily_source_failure(fetcher, market, error_reason)
                         errors.append(error_msg)
+                        self._log_daily_fallback(
+                            stock_code,
+                            market,
+                            fetcher.name,
+                            fallback_to,
+                            "provider_exception",
+                            error_type,
+                        )
                     break
 
             error_summary = f"{market_label} {stock_code} 获取失败:\n" + "\n".join(errors)
@@ -1408,11 +1487,19 @@ class DataFetcherManager:
             raise DataFetchError(error_summary)
 
         for attempt, fetcher in enumerate(fetchers, start=1):
+            fallback_to = fetchers[attempt].name if attempt < total_fetchers else None
             if not self._is_daily_source_available(fetcher, market):
                 errors.append(self._daily_source_unavailable_error(fetcher))
+                self._log_daily_fallback(
+                    stock_code,
+                    market,
+                    fetcher.name,
+                    fallback_to,
+                    "circuit_open",
+                    "CircuitOpen",
+                )
                 continue
             attempt_start = time.time()
-            fallback_to = fetchers[attempt].name if attempt < total_fetchers else None
             try:
                 logger.info(f"[数据源尝试 {attempt}/{total_fetchers}] [{fetcher.name}] 获取 {stock_code}...")
                 record_provider_run_started(
@@ -1460,6 +1547,15 @@ class DataFetcherManager:
                 )
                 if df is not None and df.empty:
                     self._record_daily_source_success(fetcher, market)
+                errors.append(f"[{fetcher.name}] (EmptyResult) empty result")
+                self._log_daily_fallback(
+                    stock_code,
+                    market,
+                    fetcher.name,
+                    fallback_to,
+                    "empty_result",
+                    "EmptyResult",
+                )
 
             except Exception as e:
                 error_type, error_reason = summarize_exception(e)
@@ -1481,9 +1577,14 @@ class DataFetcherManager:
                 )
                 self._record_daily_source_failure(fetcher, market, error_reason)
                 errors.append(error_msg)
-                if attempt < total_fetchers:
-                    next_fetcher = fetchers[attempt]
-                    logger.info(f"[数据源切换] {stock_code}: [{fetcher.name}] -> [{next_fetcher.name}]")
+                self._log_daily_fallback(
+                    stock_code,
+                    market,
+                    fetcher.name,
+                    fallback_to,
+                    "provider_exception",
+                    error_type,
+                )
                 # 继续尝试下一个数据源
                 continue
         

@@ -425,6 +425,7 @@ jobs:
           # 可选值: tencent, akshare_sina, efinance, akshare_em, tickflow, tushare
           # 如果有 TickFlow 或 Tushare Pro，可按权限把 tickflow / tushare 放在更靠前位置
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tencent,akshare_sina,efinance,akshare_em' }}
+          DAILY_SOURCE_PRIORITY: ${{ vars.DAILY_SOURCE_PRIORITY || 'tencent,baostock,akshare,pytdx,yfinance,efinance,tushare,tickflow' }}
           
         run: |
           # 解析自选股配置：
