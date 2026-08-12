@@ -131,6 +131,59 @@ class TestPipelineSingleStockNotify(unittest.TestCase):
         _, kwargs = pipeline._send_notifications.call_args
         self.assertTrue(kwargs["skip_push"])
 
+    def test_run_pushes_failure_notice_when_no_dashboard_result_succeeds(self):
+        pipeline = self._build_batch_pipeline()
+        pipeline.config.single_stock_notify = False
+        pipeline.process_single_stock = MagicMock(
+            return_value=_make_result("000001", success=False)
+        )
+
+        results = pipeline.run(
+            stock_codes=["000001"],
+            dry_run=False,
+            send_notification=True,
+        )
+
+        self.assertEqual(results, [])
+        pipeline._save_local_report.assert_not_called()
+        pipeline._send_notifications.assert_not_called()
+        pipeline.notifier.send.assert_called_once()
+        args, kwargs = pipeline.notifier.send.call_args
+        self.assertIn("决策仪表盘未生成", args[0])
+        self.assertIn("000001: JSON解析失败", args[0])
+        self.assertEqual(kwargs["route_type"], "system_error")
+        self.assertEqual(kwargs["severity"], "error")
+
+    def test_run_does_not_push_failure_notice_when_notifications_are_disabled(self):
+        pipeline = self._build_batch_pipeline()
+        pipeline.config.single_stock_notify = False
+        pipeline.process_single_stock = MagicMock(
+            return_value=_make_result("000001", success=False)
+        )
+
+        pipeline.run(
+            stock_codes=["000001"],
+            dry_run=False,
+            send_notification=False,
+        )
+
+        pipeline.notifier.send.assert_not_called()
+
+    def test_run_pushes_failure_notice_when_stock_task_returns_none(self):
+        pipeline = self._build_batch_pipeline()
+        pipeline.config.single_stock_notify = False
+        pipeline.process_single_stock = MagicMock(return_value=None)
+
+        pipeline.run(
+            stock_codes=["000001"],
+            dry_run=False,
+            send_notification=True,
+        )
+
+        pipeline.notifier.send.assert_called_once()
+        content = pipeline.notifier.send.call_args.args[0]
+        self.assertIn("000001: 分析任务未返回结果", content)
+
     def test_process_single_stock_direct_path_keeps_notify_compatibility(self):
         pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
         pipeline.fetch_and_save_stock_data = MagicMock(return_value=(True, None))

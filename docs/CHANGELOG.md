@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 个股分析 LLM 在流式与非流式调用均返回空内容时执行一次完整重试；若本轮所有股票仍无有效结果，则通过 `system_error` 路由推送“决策仪表盘未生成”的脱敏失败摘要，不再让 Actions 成功结束却静默缺少个股仪表盘，也不把占位值伪装成投资决策
 
 - [改进] GitHub Actions 日报默认优先使用腾讯、Baostock、AkShare、PyTDX 和 YFinance 等稳定免费日线源，将 Efinance 默认优先级降至 P6；来源异常、空结果或熔断时输出结构化 fallback 日志并自动尝试下一来源，单个 API 异常不终止其他股票分析与日报汇总
 - [新功能] 新增基于最近 120 个有效交易日 OHLCV 的确定性筹码分布估算，在 AkShare/Tushare 外部筹码接口关闭或不可用时提供平均成本、获利盘比例、70%/90% 成本区与集中度、主次筹码峰，并将估算来源、方法和窗口接入普通 Prompt、Agent、AnalysisContextPack 与报告 Schema；有效样本不足时保持 fail-open。

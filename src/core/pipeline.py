@@ -3224,6 +3224,7 @@ class StockAnalysisPipeline:
             )
         
         results: List[AnalysisResult] = []
+        failure_details: List[Tuple[str, str]] = []
         
         # 使用线程池并发处理
         # 注意：max_workers 设置较低（默认3）以避免触发反爬
@@ -3256,10 +3257,16 @@ class StockAnalysisPipeline:
                                 fallback_code=code,
                             )
                     elif result and not result.success:
+                        failure_details.append(
+                            (code, result.error_message or "未知原因")
+                        )
                         logger.warning(
                             f"[{code}] 分析结果标记为失败，不计入汇总: "
                             f"{result.error_message or '未知原因'}"
                         )
+                    elif result is None and not dry_run:
+                        failure_details.append((code, "分析任务未返回结果"))
+                        logger.warning(f"[{code}] 分析任务未返回结果，不计入汇总")
 
                     # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
                     if idx < len(stock_codes) - 1 and analysis_delay > 0:
@@ -3271,6 +3278,7 @@ class StockAnalysisPipeline:
                         time.sleep(analysis_delay)
 
                 except Exception as e:
+                    failure_details.append((code, str(e) or type(e).__name__))
                     logger.error(f"[{code}] 任务执行失败: {e}")
         
         # 统计
@@ -3313,8 +3321,70 @@ class StockAnalysisPipeline:
                 self._send_notifications(results, report_type, skip_push=True)
             else:
                 self._send_notifications(results, report_type)
+        elif failure_details and send_notification and not dry_run:
+            self._send_dashboard_failure_notification(failure_details)
         
         return results
+
+    def _send_dashboard_failure_notification(
+        self,
+        failure_details: List[Tuple[str, str]],
+    ) -> None:
+        if not self.notifier.is_available():
+            logger.warning("决策仪表盘未生成，且通知服务不可用")
+            return
+
+        report_language = normalize_report_language(
+            getattr(self.config, "report_language", "zh")
+        )
+        if report_language == "en":
+            title = "# ⚠️ Decision dashboard was not generated"
+            summary = "No stock analysis produced a valid result in this run. No investment decision was generated."
+            retry_hint = "Please check the LLM provider response and retry the scheduled task."
+        elif report_language == "ko":
+            title = "# ⚠️ 의사결정 대시보드가 생성되지 않았습니다"
+            summary = "이번 실행에서 유효한 종목 분석 결과가 생성되지 않아 투자 판단을 만들지 않았습니다."
+            retry_hint = "LLM 제공자 응답을 확인한 뒤 예약 작업을 다시 실행해 주세요."
+        else:
+            title = "# ⚠️ 决策仪表盘未生成"
+            summary = "本轮没有任何股票生成有效分析结果，因此未生成投资决策。"
+            retry_hint = "请检查 LLM 服务响应后重新执行定时任务。"
+
+        lines = [title, "", summary, ""]
+        for code, reason in failure_details:
+            safe_reason = (sanitize_diagnostic_text(reason) or "unknown")[:180]
+            lines.append(f"- {code}: {safe_reason}")
+        lines.extend(["", retry_hint])
+        content = "\n".join(lines)
+        codes = ",".join(sorted({code for code, _reason in failure_details}))
+        date_key = datetime.now().strftime("%Y%m%d")
+
+        try:
+            sent = self.notifier.send(
+                content,
+                email_stock_codes=[code for code, _reason in failure_details],
+                route_type="system_error",
+                severity="error",
+                dedup_key=f"dashboard:generation-failed:{date_key}:{codes}",
+                cooldown_key=f"dashboard:generation-failed:{codes}",
+            )
+            record_notification_run(
+                channel="system_error",
+                status="success" if sent else "failed",
+                success=sent,
+            )
+            if sent:
+                logger.warning("决策仪表盘生成失败通知已推送")
+            else:
+                logger.error("决策仪表盘生成失败通知推送失败")
+        except Exception as exc:
+            record_notification_run(
+                channel="system_error",
+                status="failed",
+                success=False,
+                error_message=exc,
+            )
+            logger.exception("决策仪表盘生成失败通知异常: %s", exc)
 
     def _send_single_stock_notification(
         self,

@@ -3609,6 +3609,8 @@ class GeminiAnalyzer:
             current_prompt = prompt
             retry_count = 0
             max_retries = config.report_integrity_retry if config.report_integrity_enabled else 0
+            empty_response_retry_count = 0
+            empty_response_retry_limit = 1
 
             while True:
                 start_time = time.time()
@@ -3633,7 +3635,25 @@ class GeminiAnalyzer:
                         model_used = exc.last_model
                         llm_usage = exc.last_usage
                     else:
-                        raise
+                        if empty_response_retry_count >= empty_response_retry_limit:
+                            raise
+                        empty_response_retry_count += 1
+                        current_prompt = prompt
+                        logger.warning(
+                            "[LLM空响应] %s(%s): 第 %d 次完整重试",
+                            name,
+                            code,
+                            empty_response_retry_count,
+                        )
+                        retry_progress = min(
+                            99,
+                            92 + (retry_count + empty_response_retry_count) * 2,
+                        )
+                        _emit_progress(
+                            retry_progress,
+                            f"{name}：LLM 返回为空，正在重试（{empty_response_retry_count}/{empty_response_retry_limit}）",
+                        )
+                        continue
                 elapsed = time.time() - start_time
 
                 # 记录响应信息
