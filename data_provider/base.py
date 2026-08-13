@@ -15,6 +15,7 @@
 """
 
 import logging
+import os
 import random
 import time
 from threading import BoundedSemaphore, RLock, Thread
@@ -797,6 +798,57 @@ class DataFetcherManager:
 
         return kept
 
+    @staticmethod
+    def _daily_source_token(fetcher: BaseFetcher) -> str:
+        return fetcher.name.removesuffix("Fetcher").lower()
+
+    @classmethod
+    def _order_cn_daily_fetchers(cls, fetchers: List[BaseFetcher]) -> List[BaseFetcher]:
+        configured = [
+            item.strip().lower()
+            for item in os.getenv("DAILY_SOURCE_PRIORITY", "").split(",")
+            if item.strip()
+        ]
+        if not configured:
+            return fetchers
+
+        ranks = {name: index for index, name in enumerate(configured)}
+        original_positions = {id(fetcher): index for index, fetcher in enumerate(fetchers)}
+        ordered = sorted(
+            fetchers,
+            key=lambda fetcher: (
+                ranks.get(cls._daily_source_token(fetcher), len(ranks)),
+                original_positions[id(fetcher)],
+            ),
+        )
+        if ordered != fetchers:
+            logger.info(
+                "[数据源路由] cn 日线应用 DAILY_SOURCE_PRIORITY: %s",
+                " -> ".join(fetcher.name for fetcher in ordered),
+            )
+        return ordered
+
+    @staticmethod
+    def _log_daily_fallback(
+        stock_code: str,
+        market: str,
+        current_source: str,
+        fallback_to: Optional[str],
+        reason: str,
+        error_type: str,
+    ) -> None:
+        if not fallback_to:
+            return
+        logger.warning(
+            "[数据源回退] code=%s market=%s from=%s to=%s reason=%s error_type=%s",
+            stock_code,
+            market,
+            current_source,
+            fallback_to,
+            reason,
+            error_type,
+        )
+
     @classmethod
     def _daily_health_key(cls, fetcher: BaseFetcher, market: str) -> str:
         return f"daily_data:{market}:{fetcher.name}"
@@ -1295,6 +1347,8 @@ class DataFetcherManager:
         if market != "cn":
             fetchers = self._filter_daily_fetchers_for_market(fetchers, market)
         fetchers = self._filter_fetchers_by_capability(fetchers, capability="daily_data")
+        if market == "cn":
+            fetchers = self._order_cn_daily_fetchers(fetchers)
         total_fetchers = len(fetchers)
 
         if total_fetchers == 0:
@@ -1328,6 +1382,14 @@ class DataFetcherManager:
                         continue
                     if not self._is_daily_source_available(fetcher, market):
                         errors.append(self._daily_source_unavailable_error(fetcher))
+                        self._log_daily_fallback(
+                            stock_code,
+                            market,
+                            fetcher.name,
+                            fallback_to,
+                            "circuit_open",
+                            "CircuitOpen",
+                        )
                         break
                     attempt_start = time.time()
                     try:
@@ -1380,6 +1442,15 @@ class DataFetcherManager:
                         )
                         if df is not None and df.empty:
                             self._record_daily_source_success(fetcher, market)
+                        errors.append(f"[{fetcher.name}] (EmptyResult) empty result")
+                        self._log_daily_fallback(
+                            stock_code,
+                            market,
+                            fetcher.name,
+                            fallback_to,
+                            "empty_result",
+                            "EmptyResult",
+                        )
                     except Exception as e:
                         error_type, error_reason = summarize_exception(e)
                         error_msg = f"[{fetcher.name}] ({error_type}) {error_reason}"
@@ -1400,6 +1471,14 @@ class DataFetcherManager:
                         )
                         self._record_daily_source_failure(fetcher, market, error_reason)
                         errors.append(error_msg)
+                        self._log_daily_fallback(
+                            stock_code,
+                            market,
+                            fetcher.name,
+                            fallback_to,
+                            "provider_exception",
+                            error_type,
+                        )
                     break
 
             error_summary = f"{market_label} {stock_code} 获取失败:\n" + "\n".join(errors)
@@ -1408,11 +1487,19 @@ class DataFetcherManager:
             raise DataFetchError(error_summary)
 
         for attempt, fetcher in enumerate(fetchers, start=1):
+            fallback_to = fetchers[attempt].name if attempt < total_fetchers else None
             if not self._is_daily_source_available(fetcher, market):
                 errors.append(self._daily_source_unavailable_error(fetcher))
+                self._log_daily_fallback(
+                    stock_code,
+                    market,
+                    fetcher.name,
+                    fallback_to,
+                    "circuit_open",
+                    "CircuitOpen",
+                )
                 continue
             attempt_start = time.time()
-            fallback_to = fetchers[attempt].name if attempt < total_fetchers else None
             try:
                 logger.info(f"[数据源尝试 {attempt}/{total_fetchers}] [{fetcher.name}] 获取 {stock_code}...")
                 record_provider_run_started(
@@ -1460,6 +1547,15 @@ class DataFetcherManager:
                 )
                 if df is not None and df.empty:
                     self._record_daily_source_success(fetcher, market)
+                errors.append(f"[{fetcher.name}] (EmptyResult) empty result")
+                self._log_daily_fallback(
+                    stock_code,
+                    market,
+                    fetcher.name,
+                    fallback_to,
+                    "empty_result",
+                    "EmptyResult",
+                )
 
             except Exception as e:
                 error_type, error_reason = summarize_exception(e)
@@ -1481,9 +1577,14 @@ class DataFetcherManager:
                 )
                 self._record_daily_source_failure(fetcher, market, error_reason)
                 errors.append(error_msg)
-                if attempt < total_fetchers:
-                    next_fetcher = fetchers[attempt]
-                    logger.info(f"[数据源切换] {stock_code}: [{fetcher.name}] -> [{next_fetcher.name}]")
+                self._log_daily_fallback(
+                    stock_code,
+                    market,
+                    fetcher.name,
+                    fallback_to,
+                    "provider_exception",
+                    error_type,
+                )
                 # 继续尝试下一个数据源
                 continue
         
@@ -2118,7 +2219,11 @@ class DataFetcherManager:
         """Shortcut kept for backward-compat with A-share general loop."""
         return self._supplement_quote(stock_code, primary_quote, "LongbridgeFetcher")
 
-    def get_chip_distribution(self, stock_code: str):
+    def get_chip_distribution(
+        self,
+        stock_code: str,
+        daily_data: Optional[pd.DataFrame] = None,
+    ):
         """
         获取筹码分布数据（带熔断和多数据源降级）
 
@@ -2142,36 +2247,34 @@ class DataFetcherManager:
 
         config = get_config()
 
-        # 如果筹码分布功能被禁用，直接返回 None
-        if not config.enable_chip_distribution:
-            logger.debug(f"[筹码分布] 功能已禁用，跳过 {stock_code}")
-            return None
-
         circuit_breaker = get_chip_circuit_breaker()
 
         candidate_fetchers = []
-        # 直接遍历管理器已经按 priority 排好序的数据源列表
-        for fetcher in self._get_fetchers_snapshot():
-            # 只处理实现了筹码分布逻辑的数据源
-            if not hasattr(fetcher, 'get_chip_distribution'):
-                continue
+        if config.enable_chip_distribution:
+            # 直接遍历管理器已经按 priority 排好序的数据源列表
+            for fetcher in self._get_fetchers_snapshot():
+                # 只处理实现了筹码分布逻辑的数据源
+                if not hasattr(fetcher, 'get_chip_distribution'):
+                    continue
 
-            fetcher_name = fetcher.name
-            # 动态生成熔断器的 key，例如 "TushareFetcher" -> "tushare_chip"
-            source_key = f"{fetcher_name.replace('Fetcher', '').lower()}_chip"
+                fetcher_name = fetcher.name
+                # 动态生成熔断器的 key，例如 "TushareFetcher" -> "tushare_chip"
+                source_key = f"{fetcher_name.replace('Fetcher', '').lower()}_chip"
 
-            # 检查熔断器状态
-            if not circuit_breaker.is_available(source_key):
-                logger.debug(f"[熔断] {fetcher_name} 筹码接口处于熔断状态，尝试下一个")
-                continue
+                # 检查熔断器状态
+                if not circuit_breaker.is_available(source_key):
+                    logger.debug(f"[熔断] {fetcher_name} 筹码接口处于熔断状态，尝试下一个")
+                    continue
 
-            candidate_fetchers.append((fetcher, fetcher_name, source_key))
+                candidate_fetchers.append((fetcher, fetcher_name, source_key))
+        else:
+            logger.debug(f"[筹码分布] 外部接口已禁用，尝试本地 K 线估算 {stock_code}")
 
         for index, (fetcher, fetcher_name, source_key) in enumerate(candidate_fetchers):
             fallback_to = (
                 candidate_fetchers[index + 1][1]
                 if index + 1 < len(candidate_fetchers)
-                else None
+                else "LocalOHLCVEstimate"
             )
             attempt_start = time.time()
             try:
@@ -2228,6 +2331,55 @@ class DataFetcherManager:
                 logger.warning(f"[筹码分布] {fetcher_name} 获取 {stock_code} 失败: {e}")
                 circuit_breaker.record_failure(source_key, str(e))
                 continue
+
+        local_start = time.time()
+        try:
+            record_provider_run_started(
+                data_type="chip",
+                provider="LocalOHLCVEstimate",
+                operation="analyze_chip_peak",
+            )
+            local_daily_data = daily_data
+            if local_daily_data is None:
+                local_daily_data, _ = self.get_daily_data(stock_code, days=120)
+            from src.services.chip_peak_analyzer import analyze_chip_peak
+
+            local_chip = analyze_chip_peak(local_daily_data, stock_code, window=120)
+            latency_ms = int((time.time() - local_start) * 1000)
+            if _is_meaningful_chip_distribution(local_chip):
+                record_provider_run(
+                    data_type="chip",
+                    provider="LocalOHLCVEstimate",
+                    operation="analyze_chip_peak",
+                    success=True,
+                    latency_ms=latency_ms,
+                    record_count=1,
+                )
+                logger.info(f"[筹码分布] {stock_code} 使用本地 120 日 K 线估算成功")
+                return local_chip
+            record_provider_run(
+                data_type="chip",
+                provider="LocalOHLCVEstimate",
+                operation="analyze_chip_peak",
+                success=False,
+                latency_ms=latency_ms,
+                error_type="insufficient_data",
+                error_message="fewer than 120 valid OHLCV bars",
+                record_count=0,
+            )
+        except Exception as e:
+            error_type, error_reason = summarize_exception(e)
+            record_provider_run(
+                data_type="chip",
+                provider="LocalOHLCVEstimate",
+                operation="analyze_chip_peak",
+                success=False,
+                latency_ms=int((time.time() - local_start) * 1000),
+                error_type=error_type,
+                error_message=error_reason,
+                record_count=0,
+            )
+            logger.warning(f"[筹码分布] {stock_code} 本地 120 日 K 线估算失败: {e}")
 
         logger.warning(f"[筹码分布] {stock_code} 所有数据源均失败")
         return None

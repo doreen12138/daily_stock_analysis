@@ -195,6 +195,83 @@ class TestFetcherSourceOptimization(unittest.TestCase):
             DataFetcherManager.reset_daily_source_health()
 
     @patch("src.config.get_config")
+    def test_cn_daily_priority_env_prefers_stable_sources_and_falls_back(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace()
+        DataFetcherManager.reset_daily_source_health()
+        try:
+            efinance = MagicMock()
+            efinance.name = "EfinanceFetcher"
+            efinance.priority = 0
+            efinance.get_daily_data.return_value = _make_daily_df()
+
+            tencent = MagicMock()
+            tencent.name = "TencentFetcher"
+            tencent.priority = 5
+            tencent.get_daily_data.side_effect = RuntimeError("remote api unavailable")
+
+            baostock = MagicMock()
+            baostock.name = "BaostockFetcher"
+            baostock.priority = 3
+            baostock.get_daily_data.return_value = _make_daily_df()
+
+            manager = DataFetcherManager(fetchers=[efinance, baostock, tencent])
+            with patch.dict(
+                "os.environ",
+                {"DAILY_SOURCE_PRIORITY": "tencent,baostock,efinance"},
+            ), self.assertLogs("data_provider.base", level="WARNING") as captured:
+                df, source = manager.get_daily_data(
+                    "000001",
+                    start_date="2026-05-01",
+                    end_date="2026-05-08",
+                )
+
+            self.assertFalse(df.empty)
+            self.assertEqual(source, "BaostockFetcher")
+            tencent.get_daily_data.assert_called_once()
+            baostock.get_daily_data.assert_called_once()
+            efinance.get_daily_data.assert_not_called()
+            fallback_log = "\n".join(captured.output)
+            self.assertIn("[数据源回退]", fallback_log)
+            self.assertIn("from=TencentFetcher", fallback_log)
+            self.assertIn("to=BaostockFetcher", fallback_log)
+            self.assertIn("reason=provider_exception", fallback_log)
+        finally:
+            DataFetcherManager.reset_daily_source_health()
+
+    @patch("src.config.get_config")
+    def test_empty_daily_result_emits_fallback_log(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace()
+        DataFetcherManager.reset_daily_source_health()
+        try:
+            primary = MagicMock()
+            primary.name = "TencentFetcher"
+            primary.priority = 0
+            primary.get_daily_data.return_value = pd.DataFrame()
+
+            backup = MagicMock()
+            backup.name = "BaostockFetcher"
+            backup.priority = 1
+            backup.get_daily_data.return_value = _make_daily_df()
+
+            manager = DataFetcherManager(fetchers=[primary, backup])
+            with patch.dict("os.environ", {"DAILY_SOURCE_PRIORITY": ""}), self.assertLogs(
+                "data_provider.base",
+                level="WARNING",
+            ) as captured:
+                _, source = manager.get_daily_data(
+                    "000001",
+                    start_date="2026-05-01",
+                    end_date="2026-05-08",
+                )
+
+            self.assertEqual(source, "BaostockFetcher")
+            fallback_log = "\n".join(captured.output)
+            self.assertIn("reason=empty_result", fallback_log)
+            self.assertIn("error_type=EmptyResult", fallback_log)
+        finally:
+            DataFetcherManager.reset_daily_source_health()
+
+    @patch("src.config.get_config")
     def test_manager_enables_longbridge_with_oauth_client_id(self, mock_get_config):
         mock_get_config.return_value = SimpleNamespace(
             tushare_token="",
@@ -342,7 +419,6 @@ class TestFetcherSourceOptimization(unittest.TestCase):
         self.assertEqual(source, "AkshareFetcher")
         akshare.get_daily_data.assert_called_once()
         longbridge.get_daily_data.assert_not_called()
-
 
     @patch("src.config.get_config")
     def test_daily_source_health_skips_repeatedly_failing_source(self, mock_get_config):

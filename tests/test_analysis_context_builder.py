@@ -350,6 +350,32 @@ def test_chip_missing_defaults_to_missing_and_explicit_not_supported() -> None:
     )
 
 
+def test_local_chip_estimate_preserves_fields_and_estimated_status() -> None:
+    block = AnalysisContextBuilder.build(
+        _artifacts(
+            chip_data={
+                "source": "local_ohlcv_estimate",
+                "date": "2026-05-24",
+                "avg_cost": 10.2,
+                "concentration_90": 0.08,
+                "cost_90_low": 9.4,
+                "cost_90_high": 11.0,
+                "peak_price": 10.1,
+                "sample_days": 120,
+                "calculation_method": "ohlcv_volume_decay_v1",
+                "is_estimated": True,
+            }
+        )
+    ).blocks["chip"]
+
+    assert block.status == ContextFieldStatus.ESTIMATED
+    assert block.items["peak_price"].value == 10.1
+    assert block.items["peak_price"].source == "local_ohlcv_estimate"
+    assert block.metadata["sample_days"] == 120
+    assert block.metadata["calculation_method"] == "ohlcv_volume_decay_v1"
+    assert block.metadata["is_estimated"] is True
+
+
 @pytest.mark.parametrize(
     ("payload_status", "expected_status"),
     (

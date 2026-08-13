@@ -182,7 +182,7 @@ daily_stock_analysis/
 | `LONGBRIDGE_ENABLE_OVERNIGHT` | 是否开启夜盘行情 `true` / `false`，默认 `false` | 可选 |
 | `LONGBRIDGE_PUSH_CANDLESTICK_MODE` | K 线推送模式：`realtime` 或 `confirmed`（默认 `realtime`） | 可选 |
 | `LONGBRIDGE_PRINT_QUOTE_PACKAGES` | 连接时是否打印行情包（未设置时默认 `false`；设为 `1`/`true`/`yes` 开启） | 可选 |
-| `ENABLE_CHIP_DISTRIBUTION` | 启用筹码分布（Actions 默认 false；需筹码数据时在 Variables 中设为 true，接口可能不稳定） | 可选 |
+| `ENABLE_CHIP_DISTRIBUTION` | 启用外部筹码接口（Actions 默认 false）；关闭时仍可使用本地 120 日 OHLCV 筹码估算 | 可选 |
 
 > **GitHub Actions：** 仓库自带 `00-daily-analysis.yml` 已把 `TUSHARE_TOKEN`、`TICKFLOW_API_KEY` / `TICKFLOW_*` 和上表中的 `LONGBRIDGE_*` 映射到任务环境。TickFlow 的 API Key 建议放在 **Secrets**，优先级、复权和批量开关可放在 **Variables** 或 **Secrets**。Longbridge OAuth 方式需要一个 client_id（优先 `LONGBRIDGE_OAUTH_CLIENT_ID`；留空且无 Legacy Access Token 时使用 `LONGBRIDGE_APP_KEY` 兼容），并把本机 `~/.longbridge/openapi/tokens/<client_id>` 文件 base64 后保存为 Secret `LONGBRIDGE_OAUTH_TOKEN_CACHE_B64`；Legacy 方式仍可配置 `LONGBRIDGE_APP_KEY`、`LONGBRIDGE_APP_SECRET`、`LONGBRIDGE_ACCESS_TOKEN`。可选接入点变量（如 `LONGBRIDGE_REGION`）可放在 **Variables** 或 **Secrets**。
 
@@ -415,7 +415,9 @@ daily_stock_analysis/
 | `TUSHARE_HTTP_URL` | Tushare Pro HTTP 接入地址；留空时使用官方端点 `http://api.tushare.pro`，仅在需通过公司内网代理、跨境网络或自建镜像时填 `http://` 或 `https://` 开头的完整地址 | `http://api.tushare.pro` | 可选 |
 | `TICKFLOW_API_KEY` | TickFlow API Key；可选，用于 A 股日 K、实时行情、股票列表/名称与大盘复盘增强；失败或权限不足时自动回退。 | - | 可选 |
 | `TICKFLOW_PRIORITY` | TickFlow 日 K 数据源优先级；数字越小越早尝试，默认 `2`；未配置 API Key 时不启用；不影响实时行情，实时行情顺序由 `REALTIME_SOURCE_PRIORITY` 控制。 | `2` | 可选 |
-| `TENCENT_PRIORITY` | 腾讯直连 A 股日 K 数据源优先级；数字越小越早尝试，默认 `5`，作为 Efinance、AkShare、Tushare、TickFlow、PyTDX、Baostock 和 YFinance 之后的最终兜底；不影响实时行情。 | `5` | 可选 |
+| `DAILY_SOURCE_PRIORITY` | A 股日 K 数据源顺序，使用逗号分隔的小写名称；列出的数据源按顺序优先，未列出的数据源继续按数字优先级追加。GitHub Actions 默认使用 `tencent,baostock,akshare,pytdx,yfinance,efinance,tushare,tickflow`。 | 空 | 可选 |
+| `EFINANCE_PRIORITY` | Efinance 日 K 数据源数字优先级；默认降级为 `6`，不再作为 P0。显式配置 `DAILY_SOURCE_PRIORITY` 时以列表顺序优先。 | `6` | 可选 |
+| `TENCENT_PRIORITY` | 腾讯直连 A 股日 K 数据源数字优先级；数字越小越早尝试，默认 `5`；GitHub Actions 通过 `DAILY_SOURCE_PRIORITY` 将其置于稳定免费源首位；不影响实时行情。 | `5` | 可选 |
 | `TICKFLOW_KLINE_ADJUST` | TickFlow 日 K 复权模式：`none`、`forward`、`backward`、`forward_additive`、`backward_additive`。 | `none` | 可选 |
 | `TICKFLOW_BATCH_DAILY_ENABLED` | 是否启用 TickFlow 批量日 K 预取；权限不足会短期缓存失败状态，并继续走常规回退。 | `true` | 可选 |
 | `TICKFLOW_BATCH_SIZE` | TickFlow 日 K 与实时行情批量请求的单批最大标的数。 | `100` | 可选 |
@@ -427,7 +429,7 @@ daily_stock_analysis/
 | `LONGBRIDGE_*`（可选） | 见官方 [环境变量](https://open.longbridge.com/zh-CN/docs/getting-started#环境变量)；另有 `LONGBRIDGE_STATIC_INFO_TTL_SECONDS` 与 `LONGBRIDGE_CONNECTION_COOLDOWN_SECONDS` | - | 可选 |
 | `ENABLE_REALTIME_QUOTE` | 启用实时行情（关闭后使用历史收盘价分析） | `true` | 可选 |
 | `ENABLE_REALTIME_TECHNICAL_INDICATORS` | 盘中实时技术面：启用时用实时价计算 MA5/MA10/MA20 与多头排列（Issue #234）；关闭则用昨日收盘 | `true` | 可选 |
-| `ENABLE_CHIP_DISTRIBUTION` | 启用筹码分布分析（该接口不稳定，云端部署建议关闭）。GitHub Actions 用户需在 Repository Variables 中设置 `ENABLE_CHIP_DISTRIBUTION=true` 方可启用；workflow 默认关闭。 | `true` | 可选 |
+| `ENABLE_CHIP_DISTRIBUTION` | 启用 AkShare/Tushare 外部筹码分布接口；关闭或外部接口不可用时，系统仍会尝试基于最近 120 个有效交易日 OHLCV 进行本地估算。GitHub Actions 默认关闭外部接口。 | `true` | 可选 |
 | `ENABLE_EASTMONEY_PATCH` | 东财接口补丁：东财接口频繁失败（如 RemoteDisconnected、连接被关闭）时建议设为 `true`，注入 NID 令牌与随机 User-Agent 以降低被限流概率 | `false` | 可选 |
 | `REALTIME_SOURCE_PRIORITY` | 实时行情源优先级，逗号分隔，例如 `tencent,akshare_sina,efinance,akshare_em`；需要显式加入 `tickflow` 才会使用 TickFlow 实时行情。 | 见 `.env.example` | 可选 |
 | `ENABLE_FUNDAMENTAL_PIPELINE` | 基本面聚合总开关；关闭时仅返回 `not_supported` 块，不改变原分析链路 | `true` | 可选 |
@@ -437,7 +439,11 @@ daily_stock_analysis/
 | `FUNDAMENTAL_CACHE_TTL_SECONDS` | 基本面聚合缓存 TTL（秒），短缓存减轻重复拉取 | `120` | 可选 |
 | `FUNDAMENTAL_CACHE_MAX_ENTRIES` | 基本面缓存最大条目数（TTL 内按时间淘汰） | `256` | 可选 |
 
+本地筹码估算使用最近 120 个有效交易日的 OHLCV，通过确定性的成交量迁移与衰减模型计算平均成本、获利盘比例、70%/90% 成本区与集中度、主筹码峰和可选次峰。历史换手率不在标准日线契约中时，模型使用相对成交量构造迁移强度，并在结果中标记 `source=local_ohlcv_estimate`、`calculation_method=ohlcv_volume_decay_v1` 和 `is_estimated=true`。该结果是价格—成交量分布估算，不是账户级真实持仓数据；不足 120 个有效交易日、停牌或异常价格导致有效样本不足时不生成估算。外部接口返回有效数据时仍优先使用外部结果，本地估算只作为稳定降级路径，失败不会中断主分析。
+
 > 行为说明：
+> - GitHub Actions 日报默认先尝试腾讯、Baostock、AkShare、PyTDX 和 YFinance，再使用 Efinance、Tushare 与 TickFlow；仓库变量 `DAILY_SOURCE_PRIORITY` 可覆盖该顺序。每个来源的异常、空结果或短期熔断都会记录结构化 `[数据源回退]` 日志并继续下一个来源。
+> - 单个日线 API 失败不会终止日报：同一股票会自动 fallback；全部来源均失败时仅该股票使用已有数据继续分析或标记失败，其他股票任务及日报汇总继续执行。
 > - A 股：按 `valuation/growth/earnings/institution/capital_flow/dragon_tiger/boards` 聚合能力返回；
 > - ETF：返回可得项，缺失能力标记为 `not_supported`，整体不影响原流程；
 > - 美股/港股：通过 yfinance 适配器返回 `valuation/growth/earnings/belong_boards`（来源 `info.sector`/`industry`），`institution/capital_flow/dragon_tiger/boards` 暂无对应数据源仍标记 `not_supported`；yfinance 不可用或字段缺失时整体降级回 `not_supported`，仍走 fail-open；

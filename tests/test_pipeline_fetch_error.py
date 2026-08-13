@@ -33,6 +33,7 @@ class PipelineFetchErrorTestCase(unittest.TestCase):
         pipeline.db = MagicMock()
         pipeline.fetcher_manager.get_stock_name.return_value = "贵州茅台"
         pipeline.db.has_today_data.return_value = True
+        pipeline.db.get_data_range.return_value = [object()] * 120
         current_time = datetime(2026, 3, 28, 1, 0, tzinfo=timezone.utc)
 
         success, error = StockAnalysisPipeline.fetch_and_save_stock_data(
@@ -46,6 +47,26 @@ class PipelineFetchErrorTestCase(unittest.TestCase):
         _mock_target.assert_called_once_with("600519", current_time=current_time)
         pipeline.db.has_today_data.assert_called_once_with("600519", date(2026, 3, 27))
         pipeline.fetcher_manager.get_daily_data.assert_not_called()
+
+    @patch.object(
+        StockAnalysisPipeline,
+        "_resolve_resume_target_date",
+        return_value=date(2026, 3, 27),
+    )
+    def test_fetch_and_save_backfills_when_cached_history_is_short(self, _mock_target):
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.fetcher_manager = MagicMock()
+        pipeline.db = MagicMock()
+        pipeline.fetcher_manager.get_stock_name.return_value = "贵州茅台"
+        pipeline.db.has_today_data.return_value = True
+        pipeline.db.get_data_range.return_value = [object()] * 119
+        pipeline.fetcher_manager.get_daily_data.return_value = (MagicMock(empty=False), "mock")
+
+        success, error = StockAnalysisPipeline.fetch_and_save_stock_data(pipeline, "600519")
+
+        self.assertTrue(success)
+        self.assertIsNone(error)
+        pipeline.fetcher_manager.get_daily_data.assert_called_once_with("600519", days=120)
 
     def test_resolve_resume_target_date_normalizes_supported_a_share_formats(self):
         with patch("src.core.pipeline.get_market_for_stock", return_value="cn") as mock_market, patch(
