@@ -254,6 +254,8 @@ Default schedule: Every weekday at **18:00 (Beijing Time)** automatic execution.
 
 For the notification baseline, diagnostics, and deployment notes, see [Notification Guide](notifications.md).
 
+When both streaming and non-streaming stock-analysis LLM requests return empty content, the analyzer makes one full retry. If no stock produces a valid analysis result after retries, the system does not fabricate a placeholder investment decision; instead, it sends a “Decision dashboard was not generated” summary through the `system_error` route with the affected stocks and sanitized reasons. When at least one stock succeeds, the regular dashboard continues to include only valid results.
+
 | Variable | Description | Required |
 |--------|------|:----:|
 | `WECHAT_WEBHOOK_URL` | WeChat Work Bot Webhook URL | Optional |

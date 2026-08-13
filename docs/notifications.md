@@ -223,7 +223,7 @@ P3 新增三类通知路由配置：
 | --- | --- | --- |
 | `report` | `NOTIFICATION_REPORT_CHANNELS` | 单股推送、聚合日报、大盘复盘、合并推送、飞书文档成功链接 |
 | `alert` | `NOTIFICATION_ALERT_CHANNELS` | EventMonitor 触发通知 |
-| `system_error` | `NOTIFICATION_SYSTEM_ERROR_CHANNELS` | 预留能力；当前不新增自动系统错误生产者 |
+| `system_error` | `NOTIFICATION_SYSTEM_ERROR_CHANNELS` | 系统错误通知；当一轮个股分析没有任何有效结果、无法生成决策仪表盘时，会发送脱敏失败摘要 |
 
 配置值为逗号分隔渠道枚举：`wechat,dingtalk,feishu,telegram,email,pushover,ntfy,gotify,pushplus,serverchan3,custom,discord,slack,astrbot`。
 
@@ -238,6 +238,8 @@ P3 新增三类通知路由配置：
 ## 聚合报告失败隔离
 
 P5 强化聚合报告通知路径的失败边界：`_send_notifications()` 在 report 路由过滤后对每个静态通知渠道单独发送。某个渠道抛异常会记录日志并视为该渠道失败，但不会跳过后续渠道，也不会中断分析主流程。
+
+若所有个股均因 LLM 空响应、无效 JSON 或其他分析异常失败，常规 report 路径没有可推送的有效决策。系统会先对完全空响应执行一次完整 LLM 重试；仍无有效结果时，通过 `system_error` 路由发送“决策仪表盘未生成”摘要。该摘要只包含股票代码和脱敏失败原因，不会把默认分数、持有占位或旧报告伪装为本轮决策。
 
 - 邮件按 receiver group 单独隔离；某个收件人分组失败时，后续分组仍会继续发送。
 - 任一静态渠道发送成功时，P4 降噪 reservation 会写入正式记录；全部静态渠道失败或抛异常时，会释放 reservation。

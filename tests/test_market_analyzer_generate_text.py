@@ -2584,6 +2584,59 @@ class TestAnalyzerGenerateText:
         assert result.code == "600519"
         assert result.search_performed is True
 
+    def test_analyze_retries_once_after_all_models_return_empty(self):
+        from src.analyzer import AnalysisResult, _AllModelsFailedError
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            gemini_request_delay=0,
+            report_language="zh",
+            litellm_model="provider/primary-model",
+            litellm_fallback_models=[],
+            llm_temperature=0.7,
+            llm_model_list=[],
+            report_integrity_enabled=False,
+            report_integrity_retry=0,
+            generation_backend="litellm",
+            generation_fallback_backend="litellm",
+        )
+        empty_error = _AllModelsFailedError(
+            "empty response",
+            last_response_text=None,
+            last_model=None,
+            last_usage={},
+        )
+        parsed_result = AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            sentiment_score=72,
+            trend_prediction="看多",
+            operation_advice="持有",
+            analysis_summary="重试成功",
+        )
+
+        with patch.object(analyzer, "is_available", return_value=True), \
+             patch.object(analyzer, "_get_analysis_system_prompt", return_value="system"), \
+             patch.object(analyzer, "_get_skill_prompt_sections", return_value=("", "", True)), \
+             patch.object(analyzer, "_format_prompt", return_value="prompt"), \
+             patch.object(
+                 analyzer,
+                 "_call_litellm",
+                 side_effect=[
+                     empty_error,
+                     ("valid JSON", "provider/primary-model", {}),
+                 ],
+             ) as mock_call, \
+             patch.object(analyzer, "_parse_response", return_value=parsed_result), \
+             patch.object(analyzer, "_build_market_snapshot", return_value={}):
+            result = analyzer.analyze(
+                {"code": "600519", "stock_name": "贵州茅台"},
+            )
+
+        assert result.success is True
+        assert result.analysis_summary == "重试成功"
+        assert mock_call.call_count == 2
+
 
 # ---------------------------------------------------------------------------
 # market_analyzer uses generate_text(), not private attributes
